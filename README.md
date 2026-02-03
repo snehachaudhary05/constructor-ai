@@ -4,8 +4,12 @@ A powerful AI-powered email management system that integrates with Gmail to help
 
 ## 🌐 Live Demo
 
-**Frontend URL:** `https://your-app-name.vercel.app` (Update after deployment)
-**Backend URL:** `https://your-backend-url.com` (Update after deployment)
+**Frontend URL:** https://constructor-ai-1.vercel.app
+**Backend URL:** https://constructor-ai.onrender.com
+
+**Test Credentials:**
+- Email: `constructoraidemo@gmail.com`
+- Password: `test@1234`
 
 ## ✨ Features
 
