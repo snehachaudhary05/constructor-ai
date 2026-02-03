@@ -75,7 +75,7 @@ Before setting up the project, ensure you have:
 
 4. **Add Test Users**
    - Go to "APIs & Services" > "OAuth consent screen"
-   - Under "Test users", add `test@gmail.com`
+   - Under "Test users", add `testingcheckuser1234@gmail.com`
    - Also add your own email for testing
 
 ### Part 2: Backend Setup
@@ -388,4 +388,4 @@ Created as part of a technical assessment demonstrating:
 
 ---
 
-**Note:** Remember to update the live URL in this README after deployment and add `test@gmail.com` as a test user in your Google Cloud OAuth consent screen.
+**Note:** Remember to update the live URL in this README after deployment and add `testingcheckuser1234@gmail.com` as a test user in your Google Cloud OAuth consent screen.
