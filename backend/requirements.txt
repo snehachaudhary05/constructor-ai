@@ -16,6 +16,3 @@ pytest==7.4.4
 pytest-asyncio==0.23.3
 httpx==0.26.0
 itsdangerous==2.1.2
-cryptography==41.0.7
-PyJWT==2.8.0
-bcrypt==4.1.2
