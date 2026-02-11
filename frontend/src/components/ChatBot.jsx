@@ -181,6 +181,27 @@ const ChatBot = () => {
     }
   };
 
+  const handleCancelReply = () => {
+    // Clear the generated reply state
+    setGeneratedReply(null);
+    setSelectedEmail(null);
+    
+    // Remove the reply message from chat history
+    setMessages((prev) => 
+      prev.filter(msg => !msg.replyData)
+    );
+    
+    // Add cancellation confirmation message
+    setMessages((prev) => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: '❌ Reply cancelled.',
+        timestamp: new Date(),
+      },
+    ]);
+  };
+
   const handleDeleteEmail = async (email) => {
     setShowConfirmDelete(email);
   };
@@ -287,7 +308,7 @@ const ChatBot = () => {
                     </button>
                     <button
                       className="btn btn-secondary"
-                      onClick={() => setGeneratedReply(null)}
+                      onClick={handleCancelReply}
                       disabled={isLoading}
                     >
                       Cancel
