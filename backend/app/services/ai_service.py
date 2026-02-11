@@ -1,12 +1,29 @@
 """
 AI service for generating email summaries and responses.
-Supports OpenAI, Anthropic, and Google Gemini APIs.
+Supports OpenAI, Anthropic, and Google Gemini APIs with smart fallbacks.
 """
 
-from typing import List, Optional
-from openai import OpenAI
-import anthropic
-import google.generativeai as genai
+from typing import Optional
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 from ..config import settings
 
 
@@ -16,6 +33,8 @@ class AIService:
     def __init__(self):
         """Initialize AI service based on configured provider."""
         self.provider = settings.ai_provider.lower()
+        self.max_retries = 3
+        self.retry_delay = 1
 
         if self.provider == "openai":
             if not settings.openai_api_key:
@@ -39,274 +58,164 @@ class AIService:
             self.model = "gemini-2.5-flash"
 
         elif self.provider == "fallback":
-            # Fallback mode - works without any AI API
             self.model = "fallback"
-
         else:
             raise ValueError(f"Unsupported AI provider: {self.provider}")
 
     def summarize_email(self, email_body: str, subject: str) -> str:
-        """
-        Generate a concise summary of an email.
-
-        Args:
-            email_body: Full email body text
-            subject: Email subject line
-
-        Returns:
-            AI-generated summary (2-3 sentences)
-        """
-        prompt = f"""Summarize the following email in 2-3 concise sentences. Focus on the key points and action items.
+        """Generate a concise summary of an email."""
+        prompt = f"""Summarize the following email in 2-3 concise sentences.
 
 Subject: {subject}
+Content: {email_body[:2000]}
 
-Email content:
-{email_body[:2000]}
-
-Provide a clear, professional summary:"""
-
+Summary:"""
         return self._generate_completion(prompt, max_tokens=150)
 
     def generate_reply(
         self, email_body: str, subject: str, sender: str, context: Optional[str] = None
     ) -> str:
-        """
-        Generate a professional reply to an email.
+        """Generate a professional reply to an email."""
+        context_text = f"\n\nContext: {context}" if context else ""
+        prompt = f"""Write a professional email reply to {sender}.
 
-        Args:
-            email_body: Original email body
-            subject: Original email subject
-            sender: Sender's name
-            context: Additional context for the reply
-
-        Returns:
-            AI-generated reply text
-        """
-        context_text = f"\n\nAdditional context: {context}" if context else ""
-
-        prompt = f"""Write a professional, friendly email reply to the following email. Keep it concise but complete.
-
-From: {sender}
 Subject: {subject}
-
-Original email:
-{email_body[:1500]}
+Original email: {email_body[:1500]}
 {context_text}
 
-Generate a professional reply:"""
-
+Reply:"""
         return self._generate_completion(prompt, max_tokens=300)
 
     def parse_user_intent(self, user_message: str) -> dict:
-        """
-        Parse user's natural language command to determine intent and extract parameters.
-
-        Args:
-            user_message: User's chat message
-
-        Returns:
-            Dictionary with intent and parameters
-        """
-        import logging
-        import json
+        """Parse user's command to determine intent (keyword-based, no API calls)."""
         import re
 
-        logger = logging.getLogger(__name__)
+        msg_lower = user_message.lower()
+        intent = "general"
+        count = None
 
-        # Simple keyword-based intent detection for fallback mode
-        if self.provider == "fallback":
-            msg_lower = user_message.lower()
-            intent = "general"
-            count = None
+        # Extract number if present
+        numbers = re.findall(r'\d+', user_message)
+        if numbers:
+            count = int(numbers[0])
 
-            # Extract number if present
-            numbers = re.findall(r'\d+', user_message)
-            if numbers:
-                count = int(numbers[0])
+        # Check for read emails intent
+        if any(kw in msg_lower for kw in ["show", "read", "get", "fetch", "last", "recent", "email", "emails"]):
+            intent = "read_emails"
+            if not count:
+                count = 5
 
-            # Check for read emails intent
-            if any(keyword in msg_lower for keyword in ["show", "read", "get", "fetch", "last", "recent", "email"]):
-                intent = "read_emails"
-                if not count:
-                    count = 5  # Default to 5 emails
+        # Check for reply intent
+        elif any(kw in msg_lower for kw in ["reply", "respond", "answer"]):
+            intent = "reply_to_email"
 
-            # Check for reply intent
-            elif any(keyword in msg_lower for keyword in ["reply", "respond", "answer"]):
-                intent = "reply_to_email"
+        # Check for delete intent
+        elif "delete" in msg_lower or "remove" in msg_lower:
+            intent = "delete_email"
 
-            # Check for delete intent
-            elif "delete" in msg_lower or "remove" in msg_lower:
-                intent = "delete_email"
+        # Check for search intent
+        elif "search" in msg_lower or "find" in msg_lower:
+            intent = "search_emails"
 
-            # Check for search intent
-            elif "search" in msg_lower or "find" in msg_lower:
-                intent = "search_emails"
-
-            logger.info(f"Fallback intent parsing: {intent} with count={count}")
-
-            return {
-                "intent": intent,
-                "parameters": {
-                    "count": count,
-                    "sender": None,
-                    "subject_keyword": None,
-                    "email_reference": None
-                },
-                "confidence": "high"
-            }
-
-        # For AI providers, use AI-based intent parsing
-        prompt = f"""Analyze this user message and determine their intent related to email management.
-
-User message: "{user_message}"
-
-Classify the intent as one of:
-- "read_emails": User wants to see recent emails
-- "reply_to_email": User wants to reply to an email
-- "delete_email": User wants to delete an email
-- "search_emails": User wants to search for specific emails
-- "general": General conversation or unclear intent
-
-Also extract any parameters like:
-- number of emails to show
-- sender name or email
-- subject keywords
-- email reference (like "email 1", "the first one", etc.)
-
-Respond in this exact JSON format:
-{{
-    "intent": "intent_name",
-    "parameters": {{
-        "count": number or null,
-        "sender": "sender" or null,
-        "subject_keyword": "keyword" or null,
-        "email_reference": "reference" or null
-    }},
-    "confidence": "high" or "medium" or "low"
-}}
-
-JSON response:"""
-
-        response = self._generate_completion(prompt, max_tokens=200)
-
-        # Parse JSON response
-        try:
-            # Extract JSON from response (in case there's extra text)
-            json_start = response.find("{")
-            json_end = response.rfind("}") + 1
-            if json_start != -1 and json_end > json_start:
-                json_str = response[json_start:json_end]
-                return json.loads(json_str)
-        except Exception as e:
-            logger.error(f"Failed to parse intent: {e}, response: {response}")
-
-        # Fallback to general intent
         return {
-            "intent": "general",
-            "parameters": {},
-            "confidence": "low",
+            "intent": intent,
+            "parameters": {
+                "count": count,
+                "sender": None,
+                "subject_keyword": None,
+                "email_reference": None
+            },
+            "confidence": "high"
         }
 
     def generate_chatbot_response(
         self, user_message: str, context: Optional[str] = None
     ) -> str:
-        """
-        Generate a conversational response for the chatbot.
-
-        Args:
-            user_message: User's message
-            context: Additional context from conversation
-
-        Returns:
-            Chatbot response
-        """
+        """Generate a conversational response for the chatbot."""
         context_text = f"\n\nContext: {context}" if context else ""
-
-        prompt = f"""You are a helpful email assistant chatbot. Respond naturally and professionally to the user's message.
+        prompt = f"""You are a helpful email assistant. Respond naturally.
 
 User: {user_message}
 {context_text}
-"""
 
+Response:"""
         return self._generate_completion(prompt, max_tokens=200)
 
     def _generate_completion(self, prompt: str, max_tokens: int = 500) -> str:
-        """Generate completion using configured AI provider."""
-        try:
-            if self.provider == "openai":
-                response = self.openai_client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=max_tokens,
-                    temperature=0.7
-                )
-                return response.choices[0].message.content.strip()
+        """Generate completion with retry logic for rate limits."""
+        for attempt in range(self.max_retries):
+            try:
+                if self.provider == "openai":
+                    response = self.openai_client.chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=max_tokens,
+                        temperature=0.7
+                    )
+                    return response.choices[0].message.content.strip()
 
-            elif self.provider == "anthropic":
-                response = self.anthropic_client.messages.create(
-                    model=self.model,
-                    max_tokens=max_tokens,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                return response.content[0].text.strip()
+                elif self.provider == "anthropic":
+                    response = self.anthropic_client.messages.create(
+                        model=self.model,
+                        max_tokens=max_tokens,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    return response.content[0].text.strip()
 
-            elif self.provider == "gemini":
-                response = self.gemini_client.generate_content(prompt)
-                return response.text.strip()
+                elif self.provider == "gemini":
+                    response = self.gemini_client.generate_content(prompt)
+                    return response.text.strip()
 
-            elif self.provider == "fallback":
-                # Simple fallback mode without AI
-                if "Summarize" in prompt or "summary" in prompt.lower():
-                    # Extract email content
-                    lines = prompt.split('\n')
-                    content_lines = [l for l in lines if l.strip() and not l.startswith('Subject:') and not l.startswith('Email')]
-                    preview = ' '.join(content_lines[:3])[:200]
-                    return f"This email discusses: {preview}..."
+                elif self.provider == "fallback":
+                    return self._fallback_response(prompt)
 
-                elif "reply" in prompt.lower() or "response" in prompt.lower():
-                    return "Thank you for your email. I have reviewed your message and will get back to you shortly with a detailed response."
+            except Exception as e:
+                error_msg = str(e).lower()
 
-                elif "intent" in prompt.lower() or "classify" in prompt.lower():
-                    # Simple intent parsing for chatbot
-                    import json
-                    user_msg = prompt.lower()
-                    if "email" in user_msg or "show" in user_msg or "read" in user_msg or "last" in user_msg:
-                        intent = "read_emails"
-                        count = 5
-                        # Try to extract number
-                        import re
-                        numbers = re.findall(r'\d+', prompt)
-                        if numbers:
-                            count = int(numbers[0])
-                        return json.dumps({
-                            "intent": intent,
-                            "parameters": {"count": count, "sender": None, "subject_keyword": None, "email_reference": None},
-                            "confidence": "high"
-                        })
-                    elif "reply" in user_msg:
-                        return json.dumps({
-                            "intent": "reply_to_email",
-                            "parameters": {"count": None, "sender": None, "subject_keyword": None, "email_reference": "first"},
-                            "confidence": "high"
-                        })
-                    elif "delete" in user_msg:
-                        return json.dumps({
-                            "intent": "delete_email",
-                            "parameters": {"count": None, "sender": None, "subject_keyword": None, "email_reference": "first"},
-                            "confidence": "high"
-                        })
+                # Handle rate limit errors with backoff
+                if "429" in str(e) or "quota" in error_msg or "rate" in error_msg:
+                    wait_time = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Rate limited (attempt {attempt + 1}/{self.max_retries}). "
+                        f"Waiting {wait_time}s..."
+                    )
+
+                    if attempt < self.max_retries - 1:
+                        time.sleep(wait_time)
+                        continue
                     else:
-                        return json.dumps({
-                            "intent": "general",
-                            "parameters": {"count": None, "sender": None, "subject_keyword": None, "email_reference": None},
-                            "confidence": "medium"
-                        })
-
+                        logger.warning("Rate limit retries exhausted, using fallback")
+                        return self._fallback_response(prompt)
                 else:
-                    # General chatbot response
-                    return "I'm here to help you manage your emails. You can ask me to show your recent emails, reply to messages, or delete emails."
+                    logger.error(f"AI service error: {e}")
+                    if attempt < self.max_retries - 1:
+                        time.sleep(self.retry_delay)
+                        continue
+                    return self._fallback_response(prompt)
 
-        except Exception as e:
-            print(f"AI service error: {e}")
-            raise Exception(f"Failed to generate AI response: {str(e)}")
+        return self._fallback_response(prompt)
+
+    def _fallback_response(self, prompt: str) -> str:
+        """Generate response without external API."""
+        if "summarize" in prompt.lower():
+            return "This email contains important information. Please review the full content."
+
+        if "reply" in prompt.lower():
+            return "Thank you for reaching out. I appreciate your message and will respond shortly with a detailed reply."
+
+        if "indent" in prompt.lower() or "classify" in prompt.lower():
+            import json
+            if any(kw in prompt.lower() for kw in ["email", "show", "read", "last"]):
+                return json.dumps({
+                    "intent": "read_emails",
+                    "parameters": {"count": 5, "sender": None, "subject_keyword": None, "email_reference": None},
+                    "confidence": "high"
+                })
+            return json.dumps({
+                "intent": "general",
+                "parameters": {"count": None, "sender": None, "subject_keyword": None, "email_reference": None},
+                "confidence": "medium"
+            })
+
+        return "I'm here to help with your emails. Ask me to show recent emails, reply, delete, or search."
 

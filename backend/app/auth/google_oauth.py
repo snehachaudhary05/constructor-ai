@@ -59,7 +59,8 @@ def get_authorization_url() -> Tuple[str, str]:
     authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",
+        prompt="select_account",  # Force account selection screen
+        login_hint=None,  # Don't pre-select any account
     )
     return authorization_url, state
 

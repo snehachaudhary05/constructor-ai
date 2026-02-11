@@ -13,23 +13,19 @@ class Settings(BaseSettings):
     # Google OAuth
     google_client_id: str
     google_client_secret: str
-    google_redirect_uri: str = "http://localhost:8000/auth/callback"
+    google_redirect_uri: str
 
-    # AI Provider
-    ai_provider: str = "openai"  # 'openai', 'anthropic', or 'gemini'
+    # AI Provider Configuration
+    ai_provider: str = "openai"  # DEFAULT: openai (was gemini)
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
 
     # Application
     secret_key: str
-    frontend_url: str = "http://localhost:5173"
-    backend_url: str = "http://localhost:8000"
-
-    # Session
+    frontend_url: str
+    backend_url: str
     session_expire_hours: int = 24
-
-    # Environment
     environment: str = "development"
 
     class Config:
